@@ -57,8 +57,9 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=32m \
             --security-opt no-new-privileges:true \
             -p 127.0.0.1:18080:8080 lamsu-smoke:test
-          trap 'docker stop lamsu-smoke' EXIT
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 \
+          trap 'docker logs lamsu-smoke; docker stop lamsu-smoke' EXIT
+          docker exec lamsu-smoke nginx -t
+          curl --fail --retry 10 --retry-all-errors --retry-delay 1 --max-time 5 \
             http://127.0.0.1:18080/ -o /tmp/lamsu-index.html
           grep -q 'LAMSU' /tmp/lamsu-index.html
           for asset in app.js model.js styles.css; do
