@@ -1,0 +1,82 @@
+name: Test and publish Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify JavaScript and size calculations
+        run: |
+          node --check dist/app.js
+          node --check dist/model.js
+          node --test tests/model.test.cjs
+      - name: Set image name and tags
+        id: image
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "name=$image" >> "$GITHUB_OUTPUT"
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "$image:${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "$image:latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "$image:sha-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build an image for runtime checks
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: lamsu-smoke:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify the container with NAS settings
+        shell: bash
+        run: |
+          docker run -d --name lamsu-smoke --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+            --security-opt no-new-privileges:true \
+            -p 127.0.0.1:18080:8080 lamsu-smoke:test
+          trap 'docker stop lamsu-smoke' EXIT
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 \
+            http://127.0.0.1:18080/ -o /tmp/lamsu-index.html
+          grep -q 'LAMSU' /tmp/lamsu-index.html
+          for asset in app.js model.js styles.css; do
+            curl --fail "http://127.0.0.1:18080/$asset" -o /dev/null
+          done
+          docker exec lamsu-smoke wget -q -O /dev/null http://127.0.0.1:8080/
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish amd64 and arm64 images
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

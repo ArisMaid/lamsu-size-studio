@@ -1,0 +1,8 @@
+# 本地、站点托管和临时文件
+.DS_Store
+.openai/
+dist/.openai/
+node_modules/
+*.tar
+*.tar.gz
+.env
